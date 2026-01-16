@@ -7,7 +7,7 @@ import EditorArea from "./EditorArea";
 import TerminalPanel from "./TerminalPanel";
 import ChatPanel from "./ChatPanel";
 
-import { logout } from "../auth/auth";
+import { clearActiveProject, logout } from "../auth/auth";
 
 function IDELayout() {
   const navigate = useNavigate();
@@ -126,6 +126,7 @@ function IDELayout() {
   // 로그아웃
   const handleLogout = () => {
     logout();
+    clearActiveProject();
     navigate("/login", { replace: true });
   };
 

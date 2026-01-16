@@ -1,7 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
+import SignupPage from "./pages/SignupPage";
+import ProjectSelectPage from "./pages/ProjectSelectPage";
 import IDELayout from "./components/IDELayout";
 import ProtectedRoute from "./auth/ProtectedRoute";
+import ProjectRoute from "./auth/ProjectRoute";
 import { isAuthed } from "./auth/auth";
 
 function App() {
@@ -15,12 +18,24 @@ function App() {
         />
 
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+
+        <Route
+          path="/projects"
+          element={
+            <ProtectedRoute>
+              <ProjectSelectPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/ide"
           element={
             <ProtectedRoute>
-              <IDELayout />
+              <ProjectRoute>
+                <IDELayout />
+              </ProjectRoute>
             </ProtectedRoute>
           }
         />

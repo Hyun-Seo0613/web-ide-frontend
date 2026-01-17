@@ -1,9 +1,8 @@
 import { Navigate } from "react-router-dom";
-import { getActiveProject } from "./auth";
+import { getActiveProject } from "./auth.js";
 
-function ProjectRoute({ children }) {
-  if (!getActiveProject()) return <Navigate to="/projects" replace />;
+export default function ProjectRoute({ children }) {
+  const project = getActiveProject();
+  if (!project) return <Navigate to="/projects" replace />;
   return children;
 }
-
-export default ProjectRoute;

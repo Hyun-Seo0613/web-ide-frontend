@@ -1,6 +1,7 @@
+// src/pages/SignupPage.jsx
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getUsers, registerUser } from "../auth/auth";
+import { authApi } from "../api/authApi";
 
 function SignupPage() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ function SignupPage() {
   const [touched, setTouched] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -69,13 +71,17 @@ function SignupPage() {
     }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     const nextErrors = {
       id: validateField("id", form.id, form),
       password: validateField("password", form.password, form),
-      confirmPassword: validateField("confirmPassword", form.confirmPassword, form),
+      confirmPassword: validateField(
+        "confirmPassword",
+        form.confirmPassword,
+        form
+      ),
       email: validateField("email", form.email, form),
     };
     setErrors(nextErrors);
@@ -89,26 +95,25 @@ function SignupPage() {
     const hasError = Object.values(nextErrors).some(Boolean);
     if (hasError) return;
 
-    const users = getUsers();
-    const id = form.id.trim();
-    const email = form.email.trim();
-    const password = form.password.trim();
-    const exists = users.some((user) => user.id === id);
-    if (exists) {
-      setErrors((prev) => ({ ...prev, id: "This ID is already in use." }));
-      setTouched((prev) => ({ ...prev, id: true }));
-      return;
+    try {
+      setLoading(true);
+
+      await authApi.signup({
+        username: form.id.trim(),
+        password: form.password.trim(),
+      });
+
+      navigate("/login?signup=done", { replace: true });
+    } catch (err) {
+      console.error(err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        "회원가입 실패 (서버 응답 확인)";
+      alert(msg);
+    } finally {
+      setLoading(false);
     }
-
-    registerUser({
-      id,
-      password,
-      name: form.name.trim(),
-      email,
-      createdAt: new Date().toISOString(),
-    });
-
-    navigate("/login?signup=done", { replace: true });
   };
 
   return (
@@ -136,6 +141,7 @@ function SignupPage() {
         >
           Back to login
         </button>
+
         <h2 style={{ marginTop: 0, fontSize: 28 }}>Sign up</h2>
 
         <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
@@ -146,12 +152,14 @@ function SignupPage() {
             onChange={handleChange}
             onBlur={handleBlur}
             style={{ padding: 16, fontSize: 18 }}
+            autoComplete="username"
           />
           {touched.id && errors.id && (
             <p style={{ margin: 0, fontSize: 14, color: "#b91c1c" }}>
               {errors.id}
             </p>
           )}
+
           <div style={{ position: "relative" }}>
             <input
               name="password"
@@ -160,7 +168,13 @@ function SignupPage() {
               value={form.password}
               onChange={handleChange}
               onBlur={handleBlur}
-              style={{ padding: "16px 44px 16px 16px", fontSize: 18, width: "100%", boxSizing: "border-box" }}
+              style={{
+                padding: "16px 44px 16px 16px",
+                fontSize: 18,
+                width: "100%",
+                boxSizing: "border-box",
+              }}
+              autoComplete="new-password"
             />
             <button
               type="button"
@@ -185,7 +199,13 @@ function SignupPage() {
                     stroke="currentColor"
                     strokeWidth="2"
                   />
-                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="3"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
                 </svg>
               ) : (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -222,6 +242,7 @@ function SignupPage() {
               {errors.password}
             </p>
           )}
+
           <div style={{ position: "relative" }}>
             <input
               name="confirmPassword"
@@ -230,7 +251,13 @@ function SignupPage() {
               value={form.confirmPassword}
               onChange={handleChange}
               onBlur={handleBlur}
-              style={{ padding: "16px 44px 16px 16px", fontSize: 18, width: "100%", boxSizing: "border-box" }}
+              style={{
+                padding: "16px 44px 16px 16px",
+                fontSize: 18,
+                width: "100%",
+                boxSizing: "border-box",
+              }}
+              autoComplete="new-password"
             />
             <button
               type="button"
@@ -246,7 +273,9 @@ function SignupPage() {
                 cursor: "pointer",
                 color: "#6b7280",
               }}
-              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+              aria-label={
+                showConfirmPassword ? "Hide password" : "Show password"
+              }
             >
               {showConfirmPassword ? (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -255,7 +284,13 @@ function SignupPage() {
                     stroke="currentColor"
                     strokeWidth="2"
                   />
-                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="3"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  />
                 </svg>
               ) : (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -292,6 +327,8 @@ function SignupPage() {
               {errors.confirmPassword}
             </p>
           )}
+
+          {/* 아래 name/email은 UI만 유지(백엔드로는 보내지 않음) */}
           <input
             name="name"
             placeholder="Name (optional)"
@@ -299,6 +336,7 @@ function SignupPage() {
             onChange={handleChange}
             style={{ padding: 16, fontSize: 18 }}
           />
+
           <input
             name="email"
             placeholder="Email (optional)"
@@ -313,11 +351,14 @@ function SignupPage() {
             </p>
           )}
 
-          <button type="submit" style={{ padding: 14, cursor: "pointer", fontSize: 16 }}>
-            Create account
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ padding: 14, cursor: "pointer", fontSize: 16 }}
+          >
+            {loading ? "Creating..." : "Create account"}
           </button>
         </form>
-
       </div>
     </div>
   );

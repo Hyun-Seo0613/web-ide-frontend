@@ -1,21 +1,62 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { clearActiveProject, login } from "../auth/auth";
+import {
+  clearActiveProject,
+  login as localLogin,
+  setAccessToken,
+} from "../auth/auth.js"; // ✅ 확장자까지 명시
+import { authApi } from "../api/authApi.js"; // ✅ 이것도 통일(권장)
 
 function LoginPage() {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
+  const [loading, setLoading] = useState(false);
+
   const navigate = useNavigate();
   const location = useLocation();
-  const signupDone = new URLSearchParams(location.search).get("signup") === "done";
 
-  const handleSubmit = (e) => {
+  const signupDone =
+    new URLSearchParams(location.search).get("signup") === "done";
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // 지금은 더미 로그인 (입력만 하면 통과)
-    login();
-    clearActiveProject();
-    navigate("/projects", { replace: true });
+    if (!id.trim() || !pw.trim()) {
+      alert("아이디/비밀번호를 입력해줘!");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const res = await authApi.login({
+        username: id.trim(),
+        password: pw.trim(),
+      });
+
+      if (!res?.accessToken) {
+        alert("로그인 응답에 accessToken이 없습니다.");
+        return;
+      }
+
+      // ✅ 토큰 저장
+      setAccessToken(res.accessToken);
+
+      // ✅ 화면 표시용 user 저장 유지
+      localLogin({ id: id.trim() });
+
+      clearActiveProject();
+      navigate("/projects", { replace: true });
+    } catch (err) {
+      console.error(err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        "로그인 실패 (서버 응답을 확인해주세요)";
+      alert(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -36,15 +77,21 @@ function LoginPage() {
             value={id}
             onChange={(e) => setId(e.target.value)}
             style={{ padding: 16, fontSize: 18 }}
+            autoComplete="username"
           />
+
           <input
             placeholder="Password"
             type="password"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             style={{ padding: 16, fontSize: 18 }}
+            autoComplete="current-password"
           />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+
+          <div
+            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}
+          >
             <button
               type="button"
               onClick={() => navigate("/signup")}
@@ -52,22 +99,23 @@ function LoginPage() {
             >
               Sign up
             </button>
-            <button type="submit" style={{ padding: 14, cursor: "pointer", fontSize: 16 }}>
-              Login
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{ padding: 14, cursor: "pointer", fontSize: 16 }}
+            >
+              {loading ? "Logging in..." : "Login"}
             </button>
           </div>
         </form>
 
-        <p style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-          (백엔드 연결 필요)
-        </p>
+        {signupDone && (
+          <p style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+            Signup complete. Please log in.
+          </p>
+        )}
       </div>
-
-      {signupDone && (
-        <p style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-          Signup complete. Please log in.
-        </p>
-      )}
     </div>
   );
 }

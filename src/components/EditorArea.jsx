@@ -1,60 +1,42 @@
-function EditorArea({
-  tabs = [], // ✅ 기본값: undefined면 빈 배열
-  activeTabId,
-  onChangeActiveTab,
-  onCloseTab,
-  onChangeContent,
-}) {
-  const safeTabs = Array.isArray(tabs) ? tabs : []; // ✅ 혹시 null/다른 타입 방어
-  const activeTab = safeTabs.find((t) => t.id === activeTabId);
-
+export default function EditorArea({ filename, value, onChange }) {
   return (
-    <div className="editor-root">
-      <div className="editor-tabs">
-        {safeTabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`editor-tab ${activeTabId === tab.id ? "active" : ""}`}
-            onClick={() => onChangeActiveTab(tab.id)}
-            type="button"
-          >
-            <span className="editor-tab-title">
-              {tab.title}
-              {tab.content !== tab.savedContent ? "*" : ""}
-            </span>
-
-            <span
-              className="editor-tab-close"
-              role="button"
-              tabIndex={0}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseTab(tab.id);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onCloseTab(tab.id);
-                }
-              }}
-            >
-              ×
-            </span>
-          </button>
-        ))}
+    <div
+      className="editor-root"
+      style={{
+        height: "100%",
+        display: "grid",
+        gridTemplateRows: "auto 1fr",
+        minWidth: 0,
+      }}
+    >
+      <div
+        className="editor-tabs"
+        style={{
+          padding: "8px 12px",
+          fontWeight: 700,
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+        }}
+      >
+        {filename ? filename : "No file selected"}
       </div>
 
-      <div className="editor-content">
+      <div className="editor-content" style={{ minHeight: 0 }}>
         <textarea
           className="editor-textarea"
-          value={activeTab ? activeTab.content : ""}
-          onChange={(e) => onChangeContent(e.target.value)}
-          placeholder="코드를 입력해보세요..."
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="파일을 선택해 코드를 입력해보세요..."
+          style={{
+            width: "100%",
+            height: "100%",
+            resize: "none",
+            boxSizing: "border-box",
+            padding: 12,
+            fontFamily: "monospace",
+            fontSize: 14,
+          }}
         />
       </div>
     </div>
   );
 }
-
-export default EditorArea;

@@ -11,61 +11,35 @@ function normalizePath(path) {
 export default function FileExplorer({
   tree,
   selectedPath,
-  onSelect,
+  onSelect, // (path, type, nodeId)
   onNewFile,
   onNewFolder,
   onDelete,
+  onRename,
   disabled = false,
 }) {
-  // ✅ tree가 없거나 형태 이상해도 안 터지게
   const rootChildren = useMemo(() => {
-    const t = tree && typeof tree === "object" ? tree : null;
-    const children = t?.children;
-    return Array.isArray(children) ? children : [];
+    if (!tree || tree.type !== "folder") return [];
+    return Array.isArray(tree.children) ? tree.children : [];
   }, [tree]);
 
-  // 폴더 펼침 상태 (기본으로 src/components 펼쳐둠)
-  const [expanded, setExpanded] = useState(
-    () => new Set(["src", "src/components"])
-  );
+  const [expanded, setExpanded] = useState(() => new Set());
 
   return (
     <div style={{ padding: 8 }}>
-      {/* 상단 액션 버튼 */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={onNewFile}
-          disabled={disabled}
-          title={disabled ? "프로젝트를 먼저 선택해주세요" : ""}
-        >
+      <div
+        style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}
+      >
+        <button onClick={onNewFile} disabled={disabled}>
           + New File
         </button>
-
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={onNewFolder}
-          disabled={disabled}
-          title={disabled ? "프로젝트를 먼저 선택해주세요" : ""}
-        >
+        <button onClick={onNewFolder} disabled={disabled}>
           + New Folder
         </button>
-
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={onDelete}
-          disabled={disabled || !selectedPath}
-          title={
-            disabled
-              ? "프로젝트를 먼저 선택해주세요"
-              : !selectedPath
-              ? "삭제할 파일/폴더를 선택하세요"
-              : ""
-          }
-        >
+        <button onClick={onRename} disabled={disabled || !selectedPath}>
+          ✏️ Rename
+        </button>
+        <button onClick={onDelete} disabled={disabled || !selectedPath}>
           🗑 Delete
         </button>
       </div>
@@ -74,10 +48,10 @@ export default function FileExplorer({
 
       {rootChildren.map((node) => (
         <TreeNode
-          key={node.type === "folder" ? `d:${node.name}` : `f:${node.name}`}
+          key={node.id ?? node.name}
           node={node}
           depth={0}
-          path={node.type === "folder" ? node.name : node.name}
+          path={node.name}
           expanded={expanded}
           setExpanded={setExpanded}
           selectedPath={normalizePath(selectedPath)}
@@ -100,11 +74,11 @@ function TreeNode({
   const paddingLeft = 8 + depth * 14;
   const curPath = normalizePath(path);
 
-  if (node?.type === "folder") {
+  if (node.type === "folder") {
     const isExpanded = expanded.has(curPath);
     const isSelected = selectedPath === curPath;
 
-    const toggleFolder = () => {
+    const toggle = () => {
       setExpanded((prev) => {
         const next = new Set(prev);
         if (next.has(curPath)) next.delete(curPath);
@@ -113,15 +87,13 @@ function TreeNode({
       });
     };
 
-    const children = Array.isArray(node.children) ? node.children : [];
-
     return (
       <div>
         <button
           type="button"
           onClick={() => {
-            toggleFolder();
-            onSelect(curPath, "folder");
+            toggle();
+            onSelect(curPath, "folder", node.id ?? null);
           }}
           style={{
             width: "100%",
@@ -129,10 +101,9 @@ function TreeNode({
             padding: "6px 8px",
             paddingLeft,
             border: "none",
-            background: isSelected ? "rgba(59, 130, 246, 0.25)" : "transparent",
+            background: isSelected ? "rgba(59,130,246,0.25)" : "transparent",
             cursor: "pointer",
             fontWeight: 700,
-            color: "inherit",
             borderRadius: 6,
           }}
         >
@@ -141,42 +112,30 @@ function TreeNode({
 
         {isExpanded && (
           <div>
-            {children.map((child) => {
-              const childPath =
-                child.type === "folder"
-                  ? `${curPath}/${child.name}`
-                  : `${curPath}/${child.name}`;
-
-              return (
-                <TreeNode
-                  key={
-                    child.type === "folder"
-                      ? `d:${childPath}`
-                      : `f:${childPath}`
-                  }
-                  node={child}
-                  depth={depth + 1}
-                  path={childPath}
-                  expanded={expanded}
-                  setExpanded={setExpanded}
-                  selectedPath={selectedPath}
-                  onSelect={onSelect}
-                />
-              );
-            })}
+            {(node.children || []).map((child) => (
+              <TreeNode
+                key={child.id ?? child.name}
+                node={child}
+                depth={depth + 1}
+                path={`${curPath}/${child.name}`}
+                expanded={expanded}
+                setExpanded={setExpanded}
+                selectedPath={selectedPath}
+                onSelect={onSelect}
+              />
+            ))}
           </div>
         )}
       </div>
     );
   }
 
-  // file
   const isActive = selectedPath === curPath;
 
   return (
     <button
       type="button"
-      onClick={() => onSelect(curPath, "file")}
+      onClick={() => onSelect(curPath, "file", node.id ?? null)}
       style={{
         width: "100%",
         textAlign: "left",
@@ -184,14 +143,12 @@ function TreeNode({
         paddingLeft,
         border: "none",
         borderRadius: 6,
-        background: isActive ? "rgba(255,255,255,0.10)" : "transparent",
+        background: isActive ? "rgba(255,255,255,0.15)" : "transparent",
         cursor: "pointer",
         fontWeight: isActive ? 700 : 400,
-        color: "inherit",
       }}
     >
-      <span style={{ display: "inline-block", width: 18 }}>📄</span>
-      {node?.name ?? "(unnamed)"}
+      📄 {node.name}
     </button>
   );
 }

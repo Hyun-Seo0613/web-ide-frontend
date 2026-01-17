@@ -5,7 +5,7 @@ import ProjectSelectPage from "./pages/ProjectSelectPage";
 import IDELayout from "./components/IDELayout";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import ProjectRoute from "./auth/ProjectRoute";
-import { isAuthed } from "./auth/auth";
+import { isAuthed } from "./auth/auth.js"; // ✅ 확장자 명시
 
 function App() {
   return (
@@ -14,7 +14,9 @@ function App() {
         {/* 첫 화면: 로그인 여부에 따라 자동 분기 */}
         <Route
           path="/"
-          element={<Navigate to={isAuthed() ? "/ide" : "/login"} replace />}
+          element={
+            <Navigate to={isAuthed() ? "/projects" : "/login"} replace />
+          }
         />
 
         <Route path="/login" element={<LoginPage />} />

@@ -1,196 +1,273 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-
-import HeaderBar from "./HeaderBar";
 import FileExplorer from "./FileExplorer";
 import EditorArea from "./EditorArea";
-import TerminalPanel from "./TerminalPanel";
 import ChatPanel from "./ChatPanel";
+import TerminalPanel from "./TerminalPanel";
+import HeaderBar from "./HeaderBar";
+import { getActiveProject, logout } from "../auth/auth";
 
-import { clearActiveProject, logout } from "../auth/auth";
+function ensureRoot(tree) {
+  if (!tree || typeof tree !== "object") {
+    return { type: "folder", name: "root", children: [] };
+  }
+  if (!Array.isArray(tree.children)) tree.children = [];
+  return tree;
+}
 
-function IDELayout() {
+function clone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function normalizePath(path) {
+  if (!path) return "";
+  return path
+    .replaceAll("\\", "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/|\/$/g, "");
+}
+
+function splitPath(path) {
+  const p = normalizePath(path);
+  return p ? p.split("/") : [];
+}
+
+function findNode(root, parts) {
+  let cur = root;
+  for (const part of parts) {
+    if (!cur || cur.type !== "folder") return null;
+    cur = (cur.children || []).find((c) => c.name === part);
+  }
+  return cur || null;
+}
+
+function ensureFolder(root, parts) {
+  let cur = root;
+  for (const part of parts) {
+    let next = (cur.children || []).find(
+      (c) => c.type === "folder" && c.name === part
+    );
+    if (!next) {
+      next = { type: "folder", name: part, children: [] };
+      cur.children.push(next);
+    }
+    cur = next;
+  }
+  return cur;
+}
+
+function deleteAt(root, parts) {
+  if (parts.length === 0) return false;
+  const parentParts = parts.slice(0, -1);
+  const targetName = parts[parts.length - 1];
+  const parent = parentParts.length ? findNode(root, parentParts) : root;
+  if (!parent || parent.type !== "folder") return false;
+
+  const idx = (parent.children || []).findIndex((c) => c.name === targetName);
+  if (idx < 0) return false;
+  parent.children.splice(idx, 1);
+  return true;
+}
+
+function loadTree(storageKey) {
+  if (!storageKey) return ensureRoot(null);
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) return ensureRoot(null);
+  try {
+    return ensureRoot(JSON.parse(raw));
+  } catch {
+    return ensureRoot(null);
+  }
+}
+
+export default function IDELayout() {
   const navigate = useNavigate();
 
-  // 패널 열림/닫힘 상태
-  const [isLeftOpen, setIsLeftOpen] = useState(true);
-  const [isRightOpen, setIsRightOpen] = useState(true);
-  const [isTerminalOpen, setIsTerminalOpen] = useState(true);
+  // ✅ 항상 훅 전에 return 하지 않기
+  const activeProject = getActiveProject();
 
-  // 더미 파일 목록(나중에 백엔드 연동 시 교체)
-  const files = [
-    {
-      id: "app",
-      type: "file",
-      title: "App.jsx",
-      content: "// App.jsx\n",
-      savedContent: "// App.jsx\n",
-    },
-    {
-      id: "css",
-      type: "file",
-      title: "index.css",
-      content: "/* index.css */\n",
-      savedContent: "/* index.css */\n",
-    },
-    {
-      id: "readme",
-      type: "file",
-      title: "README.md",
-      content: "# README\n",
-      savedContent: "# README\n",
-    },
-  ];
+  const storageKey = useMemo(() => {
+    const pid = activeProject?.id;
+    return pid ? `webide:files:${pid}` : null;
+  }, [activeProject?.id]);
 
-  // 열린 탭 & 활성 탭
-  const [tabs, setTabs] = useState([files[0]]);
-  const [activeTabId, setActiveTabId] = useState(files[0].id);
+  // ✅ 프로젝트 바뀌면 리마운트용 key
+  const projectKey = storageKey ?? "no-project";
 
-  // 파일 클릭 → 탭 열기
-  const handleOpenFile = (file) => {
-    setTabs((prevTabs) => {
-      const exists = prevTabs.some((t) => t.id === file.id);
-      return exists ? prevTabs : [...prevTabs, file];
-    });
-    setActiveTabId(file.id);
-  };
+  // ✅ 상태 훅들은 항상 동일 순서로 호출
+  const [fileTree, setFileTree] = useState(() => loadTree(storageKey));
+  const [selectedPath, setSelectedPath] = useState("");
+  const [openFilePath, setOpenFilePath] = useState("");
 
-  // 탭 닫기
-  const handleCloseTab = (tabId) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    const isDirty = tab && tab.content !== tab.savedContent;
+  const [showLeft, setShowLeft] = useState(true);
+  const [showRight, setShowRight] = useState(true);
+  const [showTerminal, setShowTerminal] = useState(true);
 
-    if (isDirty) {
-      const ok = window.confirm("저장되지 않은 변경사항이 있어요. 닫을까요?");
-      if (!ok) return;
-    }
-
-    setTabs((prevTabs) => {
-      const index = prevTabs.findIndex((t) => t.id === tabId);
-      const nextTabs = prevTabs.filter((t) => t.id !== tabId);
-
-      // 닫은 탭이 active가 아니면 active 유지
-      if (activeTabId !== tabId) return nextTabs;
-
-      // 전부 닫힌 경우
-      if (nextTabs.length === 0) {
-        setActiveTabId(null);
-        return nextTabs;
-      }
-
-      // 닫은 탭이 active였다면 왼쪽 탭(없으면 첫 탭)으로 이동
-      const nextIndex = Math.max(0, index - 1);
-      setActiveTabId(nextTabs[nextIndex].id);
-      return nextTabs;
-    });
-  };
-
-  // 현재 활성 탭 내용 수정
-  const handleChangeContent = (nextContent) => {
-    setTabs((prevTabs) =>
-      prevTabs.map((t) =>
-        t.id === activeTabId ? { ...t, content: nextContent } : t
-      )
-    );
-  };
-
-  // 저장 함수
-  const handleSaveActiveTab = useCallback(() => {
-    if (!activeTabId) return;
-
-    setTabs((prevTabs) =>
-      prevTabs.map((t) =>
-        t.id === activeTabId ? { ...t, savedContent: t.content } : t
-      )
-    );
-  }, [activeTabId]);
-
-  // Cmd/Ctrl + S 저장
+  // ✅ 프로젝트 없으면 / 로 돌려보내기 (렌더 중 navigate 금지 → effect에서)
   useEffect(() => {
-    const onKeyDown = (e) => {
-      const isMac = navigator.platform.toUpperCase().includes("MAC");
-      const isSave =
-        (isMac && e.metaKey && e.key.toLowerCase() === "s") ||
-        (!isMac && e.ctrlKey && e.key.toLowerCase() === "s");
+    if (!activeProject) navigate("/", { replace: true });
+  }, [activeProject, navigate]);
 
-      if (!isSave) return;
+  // ✅ 저장
+  const saveTree = useCallback(
+    (nextTree) => {
+      if (!storageKey) return;
+      localStorage.setItem(storageKey, JSON.stringify(nextTree));
+    },
+    [storageKey]
+  );
 
-      e.preventDefault();
-      handleSaveActiveTab();
-    };
+  const setTreeAndSave = useCallback(
+    (nextTree) => {
+      setFileTree(nextTree);
+      saveTree(nextTree);
+    },
+    [saveTree]
+  );
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSaveActiveTab]);
+  const updateTree = useCallback(
+    (recipeFn) => {
+      setFileTree((prev) => {
+        const next = clone(ensureRoot(prev));
+        recipeFn(next);
+        saveTree(next);
+        return next;
+      });
+    },
+    [saveTree]
+  );
 
-  // 로그아웃
-  const handleLogout = () => {
+  // ---- File 클릭 ----
+  const handleSelect = useCallback((path, type) => {
+    setSelectedPath(path);
+    if (type === "file") setOpenFilePath(path);
+  }, []);
+
+  // ---- 새 폴더 ----
+  const handleNewFolder = useCallback(() => {
+    if (!storageKey) return alert("프로젝트를 먼저 선택해주세요.");
+
+    const base = selectedPath ? splitPath(selectedPath) : [];
+    const root = clone(ensureRoot(fileTree));
+    const selectedNode = findNode(root, base);
+    const parentParts =
+      selectedNode?.type === "file" ? base.slice(0, -1) : base;
+
+    const name = prompt("새 폴더 이름을 입력하세요 (예: components)");
+    if (!name) return;
+
+    updateTree((tree) => {
+      const parent = ensureFolder(tree, parentParts);
+      parent.children = parent.children || [];
+      if (parent.children.some((c) => c.name === name)) {
+        alert("같은 이름이 이미 있어요.");
+        return;
+      }
+      parent.children.push({ type: "folder", name, children: [] });
+    });
+  }, [storageKey, selectedPath, fileTree, updateTree]);
+
+  // ---- 새 파일 ----
+  const handleNewFile = useCallback(() => {
+    if (!storageKey) return alert("프로젝트를 먼저 선택해주세요.");
+
+    const base = selectedPath ? splitPath(selectedPath) : [];
+    const root = clone(ensureRoot(fileTree));
+    const selectedNode = findNode(root, base);
+    const parentParts =
+      selectedNode?.type === "file" ? base.slice(0, -1) : base;
+
+    const name = prompt("새 파일 이름을 입력하세요 (예: App.jsx)");
+    if (!name) return;
+
+    updateTree((tree) => {
+      const parent = ensureFolder(tree, parentParts);
+      parent.children = parent.children || [];
+      if (parent.children.some((c) => c.name === name)) {
+        alert("같은 이름이 이미 있어요.");
+        return;
+      }
+      parent.children.push({ type: "file", name, content: "" });
+    });
+  }, [storageKey, selectedPath, fileTree, updateTree]);
+
+  // ---- 삭제 ----
+  const handleDelete = useCallback(() => {
+    if (!storageKey) return alert("프로젝트를 먼저 선택해주세요.");
+    if (!selectedPath) return alert("삭제할 파일/폴더를 선택해주세요.");
+    // eslint-disable-next-line no-restricted-globals
+    if (!confirm(`정말 삭제할까요?\n${selectedPath}`)) return;
+
+    const parts = splitPath(selectedPath);
+
+    updateTree((tree) => {
+      const ok = deleteAt(tree, parts);
+      if (!ok) alert("삭제 실패 (대상을 찾지 못함)");
+    });
+
+    setSelectedPath("");
+    if (openFilePath === selectedPath) setOpenFilePath("");
+  }, [storageKey, selectedPath, openFilePath, updateTree]);
+
+  // ---- 토글 ----
+  const onToggleLeft = useCallback(() => setShowLeft((v) => !v), []);
+  const onToggleRight = useCallback(() => setShowRight((v) => !v), []);
+  const onToggleTerminal = useCallback(() => setShowTerminal((v) => !v), []);
+
+  // ---- 로그아웃 ----
+  const handleLogout = useCallback(() => {
     logout();
-    clearActiveProject();
-    navigate("/login", { replace: true });
-  };
+    navigate("/", { replace: true });
+  }, [navigate]);
+
+  // ✅ 프로젝트 없으면 화면은 잠깐 비워두기 (effect가 곧 redirect)
+  if (!activeProject) return null;
 
   return (
-    <div
-      className="ide-root"
-      style={{
-        gridTemplateRows: `
-          48px
-          1fr
-          ${isTerminalOpen ? "180px" : "0px"}
-        `,
-      }}
-    >
-      <div className="ide-header">
-        <HeaderBar
-          onToggleLeft={() => setIsLeftOpen((x) => !x)}
-          onToggleRight={() => setIsRightOpen((x) => !x)}
-          onToggleTerminal={() => setIsTerminalOpen((x) => !x)}
-          onSave={handleSaveActiveTab}
-          onLogout={handleLogout}
-          user={{ name: "developer" }}
-        />
-      </div>
+    <div className="ide-root" key={projectKey}>
+      <HeaderBar
+        onToggleLeft={onToggleLeft}
+        onToggleRight={onToggleRight}
+        onToggleTerminal={onToggleTerminal}
+        onLogout={handleLogout}
+        user={activeProject}
+      />
 
-      <div
-        className="ide-body"
-        style={{
-          gridTemplateColumns: `
-            ${isLeftOpen ? "240px" : "0px"}
-            1fr
-            ${isRightOpen ? "320px" : "0px"}
-          `,
-        }}
-      >
-        <aside className={`ide-left ${isLeftOpen ? "" : "closed"}`}>
-          <FileExplorer
-            files={files}
-            onOpenFile={handleOpenFile}
-            openTabs={tabs}
-            activeTabId={activeTabId}
-          />
-        </aside>
+      <div className="ide-body">
+        {showLeft && (
+          <div className="ide-left">
+            <FileExplorer
+              tree={fileTree}
+              selectedPath={selectedPath}
+              onSelect={handleSelect}
+              onNewFile={handleNewFile}
+              onNewFolder={handleNewFolder}
+              onDelete={handleDelete}
+              disabled={!storageKey}
+            />
+          </div>
+        )}
 
-        <main className="ide-center">
+        <div className="ide-center">
           <EditorArea
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onChangeActiveTab={setActiveTabId}
-            onCloseTab={handleCloseTab}
-            onChangeContent={handleChangeContent}
+            tree={fileTree}
+            openFilePath={openFilePath}
+            onChangeTree={setTreeAndSave}
           />
-        </main>
+        </div>
 
-        <aside className={`ide-right ${isRightOpen ? "" : "closed"}`}>
-          <ChatPanel />
-        </aside>
+        {showRight && (
+          <div className="ide-right">
+            <ChatPanel />
+          </div>
+        )}
       </div>
 
-      <div className={`ide-bottom ${isTerminalOpen ? "" : "closed"}`}>
-        <TerminalPanel />
-      </div>
+      {showTerminal && (
+        <div className="ide-bottom">
+          <TerminalPanel />
+        </div>
+      )}
     </div>
   );
 }
-
-export default IDELayout;

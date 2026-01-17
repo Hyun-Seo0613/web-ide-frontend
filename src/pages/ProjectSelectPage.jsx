@@ -28,6 +28,20 @@ const DEFAULT_PROJECTS = [
 
 const STORAGE_KEY = "webide:projects";
 
+// ✅ 프로젝트별 파일 트리 key
+const filesKeyOf = (projectId) => `webide:files:${projectId}`;
+
+// ✅ 기본 트리
+const ensureDefaultTree = (projectId) => {
+  const k = filesKeyOf(projectId);
+  if (!localStorage.getItem(k)) {
+    localStorage.setItem(
+      k,
+      JSON.stringify({ type: "folder", name: "root", children: [] })
+    );
+  }
+};
+
 const loadProjects = () => {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return DEFAULT_PROJECTS;
@@ -56,14 +70,17 @@ function ProjectSelectPage() {
   const [inviteCode, setInviteCode] = useState("");
   const [inviteError, setInviteError] = useState("");
 
+  // ✅ 기존 프로젝트들도 파일트리 키 만들어주기 (처음 한 번)
+  useEffect(() => {
+    projects.forEach((p) => ensureDefaultTree(p.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 최초 1회만
+
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     if (!keyword) return projects;
     return projects.filter((project) =>
-      [project.name, project.stack]
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword)
+      [project.name, project.stack].join(" ").toLowerCase().includes(keyword)
     );
   }, [projects, search]);
 
@@ -79,8 +96,38 @@ function ProjectSelectPage() {
 
   const handleOpenProject = (project) => {
     if (!project) return;
+
+    // ✅ 프로젝트 열기 전에 파일트리 보장
+    ensureDefaultTree(project.id);
+
     setActiveProject(project);
     navigate("/ide", { replace: true });
+  };
+
+  // ✅ New Project 버튼 연결 (UI는 그대로)
+  const handleNewProject = () => {
+    const name = prompt("새 프로젝트 이름을 입력하세요");
+    if (name === null) return; // 취소
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const id = `p_${Date.now()}`;
+    const nextProject = {
+      id,
+      name: trimmed,
+      stack: "New project",
+      updatedAt: "Just now",
+      members: 1,
+    };
+
+    const nextProjects = [nextProject, ...projects];
+    setProjects(nextProjects);
+    saveProjects(nextProjects);
+
+    // ✅ 새 프로젝트 파일트리 생성
+    ensureDefaultTree(id);
+
+    setSelectedId(id);
   };
 
   const handleJoinProject = () => {
@@ -110,9 +157,14 @@ function ProjectSelectPage() {
       updatedAt: "Just now",
       members: 1,
     };
+
     const nextProjects = [nextProject, ...projects];
     setProjects(nextProjects);
     saveProjects(nextProjects);
+
+    // ✅ 초대 프로젝트도 파일트리 생성
+    ensureDefaultTree(id);
+
     setSelectedId(nextProject.id);
     setInviteError("");
     setInviteCode("");
@@ -151,7 +203,13 @@ function ProjectSelectPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="project-select-btn project-select-btn--ghost">
+
+          {/* ✅ 여기만 onClick 추가 */}
+          <button
+            type="button"
+            className="project-select-btn project-select-btn--ghost"
+            onClick={handleNewProject}
+          >
             New Project
           </button>
         </div>
@@ -188,6 +246,7 @@ function ProjectSelectPage() {
             Double-click a card to open instantly.
           </div>
           <button
+            type="button"
             className="project-select-btn"
             onClick={() => handleOpenProject(selectedProject)}
             disabled={!selectedProject}
@@ -220,6 +279,7 @@ function ProjectSelectPage() {
                 Close
               </button>
             </div>
+
             <div className="project-select-invite-actions">
               <input
                 className="project-select-input"
@@ -227,10 +287,15 @@ function ProjectSelectPage() {
                 value={inviteCode}
                 onChange={(e) => setInviteCode(e.target.value)}
               />
-              <button className="project-select-btn" onClick={handleJoinProject}>
+              <button
+                type="button"
+                className="project-select-btn"
+                onClick={handleJoinProject}
+              >
                 Join
               </button>
             </div>
+
             {inviteError && (
               <div className="project-select-error">{inviteError}</div>
             )}

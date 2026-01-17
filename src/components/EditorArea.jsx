@@ -1,16 +1,17 @@
 function EditorArea({
-  tabs,
+  tabs = [], // ✅ 기본값: undefined면 빈 배열
   activeTabId,
   onChangeActiveTab,
   onCloseTab,
   onChangeContent,
 }) {
-  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const safeTabs = Array.isArray(tabs) ? tabs : []; // ✅ 혹시 null/다른 타입 방어
+  const activeTab = safeTabs.find((t) => t.id === activeTabId);
 
   return (
     <div className="editor-root">
       <div className="editor-tabs">
-        {tabs.map((tab) => (
+        {safeTabs.map((tab) => (
           <button
             key={tab.id}
             className={`editor-tab ${activeTabId === tab.id ? "active" : ""}`}

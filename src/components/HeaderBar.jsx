@@ -6,19 +6,26 @@ function HeaderBar({
   onLogout,
   user,
 }) {
-  console.log("HeaderBar user:", user);
   return (
     <header className="headerbar">
-      {/* 왼쪽 영역 */}
       <div className="headerbar-left">
-        <button onClick={onToggleLeft}>Left</button>
-        <button onClick={onToggleRight}>Right</button>
-        <button onClick={onToggleTerminal}>Terminal</button>
+        <button type="button" onClick={onToggleLeft}>
+          Left
+        </button>
+        <button type="button" onClick={onToggleRight}>
+          Right
+        </button>
+        <button type="button" onClick={onToggleTerminal}>
+          Terminal
+        </button>
 
-        {onSave && <button onClick={onSave}>Save</button>}
+        {onSave && (
+          <button type="button" onClick={onSave}>
+            Save
+          </button>
+        )}
       </div>
 
-      {/* 오른쪽 영역 */}
       <div className="headerbar-right">
         {user && (
           <div className="profile">
@@ -28,7 +35,7 @@ function HeaderBar({
         )}
 
         {onLogout && (
-          <button className="logout-btn" onClick={onLogout}>
+          <button type="button" onClick={onLogout}>
             Logout
           </button>
         )}

@@ -1,526 +1,621 @@
-﻿import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import HeaderBar from "./HeaderBar";
-import FileExplorer from "./FileExplorer";
-import EditorArea from "./EditorArea";
-import TerminalPanel from "./TerminalPanel";
-import ChatPanel from "./ChatPanel";
+import FileExplorer from "../components/FileExplorer";
+import EditorArea from "../components/EditorArea";
+import ChatPanel from "../components/ChatPanel";
+import TerminalPanel from "../components/TerminalPanel";
+import HeaderBar from "../components/HeaderBar";
 
+import { getActiveProject, logout } from "../auth/auth";
+import { fileApi } from "../api/fileApi";
+import { fileContentApi } from "../api/fileContentApi";
 import {
-  clearActiveProject,
-  getActiveProject,
-  logout,
-} from "../auth/auth";
+  createCompileSocket,
+  wsInput,
+  wsStart,
+  wsStop,
+} from "../api/compileWs";
 
-const LANGUAGE_MAP = { py: "python", java: "java" };
+// ---------------- utils ----------------
+function normalizePath(path) {
+  if (!path) return "";
+  return path
+    .replaceAll("\\", "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/|\/$/g, "");
+}
 
-function IDELayout() {
+function extToLang(filename) {
+  const n = (filename || "").toLowerCase();
+  if (n.endsWith(".py")) return "python";
+  if (n.endsWith(".java")) return "java";
+  return null;
+}
+
+/**
+ * 서버 tree node (children 있을 수도) 를 UI 타입으로 변환
+ * server type: "FOLDER"|"FILE"  -> UI: "folder"|"file"
+ */
+function convertServerTreeToUi(node) {
+  if (!node || typeof node !== "object") return null;
+
+  const isFolder = node.type === "FOLDER";
+  const ui = {
+    id: node.id,
+    name: node.name,
+    type: isFolder ? "folder" : "file",
+    projectId: node.projectId,
+    parentId: node.parentId,
+    children: isFolder ? [] : undefined,
+    _raw: node,
+  };
+
+  const children = Array.isArray(node.children) ? node.children : [];
+  if (isFolder) {
+    ui.children = children.map(convertServerTreeToUi).filter(Boolean);
+  }
+  return ui;
+}
+
+/**
+ * 서버 응답이 flat(list)인지 tree인지 모를 때 "무조건 UI 트리(root)"로 정규화
+ */
+function normalizeToUiRoot(serverData) {
+  // 1) 이미 트리 배열로 오는 경우
+  if (
+    Array.isArray(serverData) &&
+    serverData.length > 0 &&
+    serverData[0]?.children
+  ) {
+    return {
+      type: "folder",
+      name: "root",
+      children: serverData.map(convertServerTreeToUi).filter(Boolean),
+    };
+  }
+
+  // 2) 단일 트리 노드로 오는 경우
+  if (
+    serverData &&
+    typeof serverData === "object" &&
+    Array.isArray(serverData.children)
+  ) {
+    const uiNode = convertServerTreeToUi(serverData);
+    if (uiNode?.name === "root") return uiNode;
+    return { type: "folder", name: "root", children: [uiNode].filter(Boolean) };
+  }
+
+  // 3) flat list로 오는 경우
+  if (Array.isArray(serverData)) {
+    const flat = serverData;
+    const root = { type: "folder", name: "root", children: [] };
+    const map = new Map();
+
+    flat.forEach((item) => {
+      const isFolder = item.type === "FOLDER";
+      map.set(item.id, {
+        id: item.id,
+        name: item.name,
+        type: isFolder ? "folder" : "file",
+        projectId: item.projectId,
+        parentId: item.parentId,
+        children: isFolder ? [] : undefined,
+        _raw: item,
+      });
+    });
+
+    flat.forEach((item) => {
+      const node = map.get(item.id);
+      const parentId = item.parentId;
+
+      if (parentId == null) {
+        root.children.push(node);
+        return;
+      }
+      const parent = map.get(parentId);
+      if (parent && parent.type === "folder") parent.children.push(node);
+      else root.children.push(node);
+    });
+
+    // 폴더 먼저 정렬
+    const sortRec = (folder) => {
+      folder.children?.sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      });
+      folder.children?.forEach((c) => c.type === "folder" && sortRec(c));
+    };
+    sortRec(root);
+
+    return root;
+  }
+
+  return { type: "folder", name: "root", children: [] };
+}
+
+/**
+ * UI 트리에서 id로 노드 찾기
+ */
+function findNodeById(root, id) {
+  if (!root || !id) return null;
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (cur?.id === id) return cur;
+    const children = Array.isArray(cur?.children) ? cur.children : [];
+    for (const c of children) stack.push(c);
+  }
+  return null;
+}
+
+// ---------------- component ----------------
+export default function IDELayout() {
   const navigate = useNavigate();
-
-  // Panel toggles
-  const [isLeftOpen, setIsLeftOpen] = useState(true);
-  const [isRightOpen, setIsRightOpen] = useState(true);
-  const [isTerminalOpen, setIsTerminalOpen] = useState(true);
-
-  const [fileTree, setFileTree] = useState([]);
-  const [tabs, setTabs] = useState([]);
-  const [activeTabId, setActiveTabId] = useState(null);
-
-  const [selectedItemType, setSelectedItemType] = useState(null);
-  const [selectedFolderId, setSelectedFolderId] = useState(null);
-
-  const [terminalLines, setTerminalLines] = useState([
-    "Welcome to Web IDE Terminal (MVP)",
-    "Type 'help' to see commands.",
-  ]);
-
-  const [isRunning, setIsRunning] = useState(false);
-  const isRunningRef = useRef(false);
-  const wsRef = useRef(null);
-  const wsOpenedRef = useRef(false);
-  const stopRequestedRef = useRef(false);
-
   const activeProject = getActiveProject();
   const projectId = activeProject?.id ?? null;
 
-  const setRunning = useCallback((next) => {
-    isRunningRef.current = next;
-    setIsRunning(next);
+  const [fileTree, setFileTree] = useState({
+    type: "folder",
+    name: "root",
+    children: [],
+  });
+
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [openFileId, setOpenFileId] = useState(null);
+  const [openFileName, setOpenFileName] = useState("");
+  const [openFilePath, setOpenFilePath] = useState("");
+
+  const [editorValue, setEditorValue] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  const [showLeft, setShowLeft] = useState(true);
+  const [showRight, setShowRight] = useState(true);
+  const [showTerminal, setShowTerminal] = useState(true);
+
+  // ---------- terminal / ws ----------
+  const [terminalLines, setTerminalLines] = useState([
+    "Web IDE Terminal",
+    "Run 버튼으로 Java/Python 실행 (/ws/compile)",
+  ]);
+  const [running, setRunning] = useState(false);
+  const [language, setLanguage] = useState("python");
+  const wsRef = useRef(null);
+  const pendingStartRef = useRef(null);
+
+  const appendTerminal = useCallback((text) => {
+    setTerminalLines((prev) => [...prev, text]);
   }, []);
 
-  const appendTerminalLine = useCallback((line) => {
-    setTerminalLines((prev) => [...prev, line]);
+  const clearTerminal = useCallback(() => {
+    setTerminalLines([]);
   }, []);
 
-  const handleTerminalCommand = useCallback((raw) => {
-    const cmd = raw.trim();
-    if (!cmd) return;
+  const connectWsIfNeeded = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
-    setTerminalLines((prev) => [...prev, `> ${cmd}`]);
-
-    if (cmd === "help") {
-      setTerminalLines((prev) => [
-        ...prev,
-        "Commands:",
-        "  help  - show commands",
-        "  clear - clear terminal",
-        "  echo <text> - print text",
-      ]);
+    // 이미 연결중이면 그대로 둠
+    if (wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING)
       return;
-    }
 
-    if (cmd === "clear") {
-      setTerminalLines([]);
-      return;
-    }
+    const ws = createCompileSocket({
+      onOpen: () => {
+        appendTerminal("[ws] connected");
 
-    if (cmd.startsWith("echo ")) {
-      const text = cmd.slice(5);
-      setTerminalLines((prev) => [...prev, text]);
-      return;
-    }
+        // 연결 전에 Run 눌렀으면 여기서 start
+        if (pendingStartRef.current) {
+          const payload = pendingStartRef.current;
+          pendingStartRef.current = null;
 
-    setTerminalLines((prev) => [...prev, `Command not found: ${cmd}`]);
-  }, []);
+          setRunning(true);
+          appendTerminal(`\n▶️ RUN (${payload.language})`);
+          wsStart(ws, payload);
+        }
+      },
+      onClose: (e) => {
+        appendTerminal(`[ws] closed (code=${e?.code ?? "?"})`);
+        wsRef.current = null;
+        setRunning(false);
+      },
+      onError: () => {
+        appendTerminal("[ws] error");
+        setRunning(false);
+      },
+      onMessage: (msg) => {
+        if (!msg || typeof msg !== "object") return;
 
-  const fetchJson = useCallback(async (url, options = {}) => {
-    const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-
-    return res.json();
-  }, []);
-
-  const buildTree = useCallback((items) => {
-    const nodes = new Map();
-
-    items.forEach((item) => {
-      const isFile = String(item.type).toUpperCase() === "FILE";
-      const node = isFile
-        ? {
-            id: item.id,
-            type: "file",
-            title: item.name,
-          }
-        : {
-            id: item.id,
-            type: "folder",
-            name: item.name,
-            children: [],
-          };
-      nodes.set(item.id, { ...node, parentId: item.parentId });
-    });
-
-    const roots = [];
-
-    nodes.forEach((node) => {
-      const parentId = node.parentId;
-      if (!parentId || parentId === node.id || !nodes.has(parentId)) {
-        roots.push(node);
-        return;
-      }
-
-      const parent = nodes.get(parentId);
-      if (parent.type === "folder") {
-        parent.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    });
-
-    return roots;
-  }, []);
-
-  useEffect(() => {
-    if (!projectId) {
-      appendTerminalLine("Project not selected.");
-      return;
-    }
-
-    let isMounted = true;
-
-    const loadTree = async () => {
-      try {
-        const data = await fetchJson(`/api/files/project/${projectId}/tree`);
-        if (!isMounted) return;
-        setFileTree(buildTree(Array.isArray(data) ? data : []));
-      } catch (err) {
-        if (!isMounted) return;
-        appendTerminalLine(`파일 트리 로드 실패: ${err.message}`);
-      }
-    };
-
-    loadTree();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [appendTerminalLine, buildTree, fetchJson, projectId]);
-
-  const handleOpenFile = useCallback(
-    async (file) => {
-      if (!file?.id) return;
-      setSelectedItemType("file");
-      setSelectedFolderId(null);
-
-      setActiveTabId(file.id);
-
-      try {
-        const meta = await fetchJson(`/api/files/${file.id}`);
-        if (meta?.isDeleted) {
-          appendTerminalLine("삭제된 파일입니다.");
+        if (msg.type === "output") {
+          const prefix = msg.stream === "stderr" ? "[stderr] " : "";
+          appendTerminal(prefix + (msg.data ?? ""));
           return;
         }
 
-        const title = meta?.name || file.title || file.name || "Untitled";
+        if (msg.type === "result") {
+          appendTerminal("");
+          appendTerminal(
+            `✅ result: ${msg.result ?? ""} (exitCode=${msg.exitCode ?? ""}, ${msg.performance ?? ""}ms)`
+          );
+          if (msg.stderr) appendTerminal("[stderr]\n" + msg.stderr);
+          setRunning(false);
+          return;
+        }
 
-        setTabs((prevTabs) => {
-          const exists = prevTabs.some((t) => t.id === file.id);
-          if (exists) {
-            return prevTabs.map((t) =>
-              t.id === file.id ? { ...t, title } : t
-            );
+        if (msg.type === "error") {
+          appendTerminal("❌ error: " + (msg.message ?? "unknown"));
+          setRunning(false);
+        }
+      },
+    });
+
+    wsRef.current = ws;
+  }, [appendTerminal]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        wsRef.current?.close();
+      } catch {}
+      wsRef.current = null;
+    };
+  }, []);
+
+  // ---------- auth/project guard ----------
+  useEffect(() => {
+    if (!activeProject) navigate("/projects", { replace: true });
+  }, [activeProject, navigate]);
+
+  // ---------- tree ----------
+  const refreshTree = useCallback(async () => {
+    if (!projectId) return;
+    const data = await fileApi.getTree(projectId);
+    const uiRoot = normalizeToUiRoot(data);
+    setFileTree(uiRoot);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    refreshTree().catch(console.error);
+  }, [projectId, refreshTree]);
+
+  // ---------- select ----------
+  const handleSelect = useCallback(
+    async (path, type) => {
+      const p = normalizePath(path);
+      setSelectedPath(p);
+
+      // 기존 방식 유지: 선택 path 기반 id 계산
+      // (FileExplorer가 id를 안 넘기는 버전이라도 동작)
+      const dfs = (node, curPath) => {
+        const nextPath =
+          node.name === "root"
+            ? ""
+            : curPath
+              ? `${curPath}/${node.name}`
+              : node.name;
+
+        if (normalizePath(nextPath) === normalizePath(p) && node.id) {
+          return node.id;
+        }
+        if (node.type === "folder" && Array.isArray(node.children)) {
+          for (const c of node.children) {
+            const found = dfs(c, nextPath);
+            if (found) return found;
           }
-          return [
-            ...prevTabs,
-            {
-              id: file.id,
-              title,
-              content: "",
-              savedContent: "",
-              isLoading: true,
-            },
-          ];
-        });
+        }
+        return null;
+      };
 
-        const data = await fetchJson(`/api/file-contents/file/${file.id}`);
-        const content = data?.content ?? "";
+      const id = dfs(fileTree, "");
+      setSelectedNodeId(id);
 
-        setTabs((prevTabs) =>
-          prevTabs.map((t) =>
-            t.id === file.id
-              ? {
-                  ...t,
-                  content,
-                  savedContent: content,
-                  isLoading: false,
-                }
-              : t
-          )
-        );
-      } catch (err) {
-        appendTerminalLine(`파일 열기 실패: ${err.message}`);
-        setTabs((prevTabs) =>
-          prevTabs.map((t) =>
-            t.id === file.id ? { ...t, isLoading: false } : t
-          )
-        );
+      if (type === "file" && id) {
+        // 파일 열기
+        setOpenFileId(id);
+        setOpenFilePath(p);
+
+        const node = findNodeById(fileTree, id);
+        const name = node?.name ?? "";
+        setOpenFileName(name);
+
+        const inferred = extToLang(name);
+        if (inferred) setLanguage(inferred);
+
+        try {
+          const latest = await fileContentApi.getLatest(id);
+          setEditorValue(latest?.content ?? "");
+          setDirty(false);
+        } catch (e) {
+          console.error(e);
+          setEditorValue("");
+          setDirty(false);
+          alert("파일 내용 불러오기 실패 (Network/Console 확인)");
+        }
       }
     },
-    [appendTerminalLine, fetchJson]
+    [fileTree]
   );
 
-  const handleChangeActiveTab = (tabId) => {
-    setActiveTabId(tabId);
-    setSelectedItemType("file");
-    setSelectedFolderId(null);
-  };
+  // ---------- create folder/file ----------
+  const handleNewFolder = useCallback(async () => {
+    if (!projectId) return alert("프로젝트를 먼저 선택해주세요.");
 
-  const handleSelectFolder = (folderId) => {
-    setSelectedItemType("folder");
-    setSelectedFolderId(folderId);
-  };
-
-  const handleCloseTab = (tabId) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    const isDirty = tab && tab.content !== tab.savedContent;
-
-    if (isDirty) {
-      const ok = window.confirm(
-        "You have unsaved changes. Close this tab anyway?"
-      );
-      if (!ok) return;
-    }
-
-    setTabs((prevTabs) => {
-      const index = prevTabs.findIndex((t) => t.id === tabId);
-      const nextTabs = prevTabs.filter((t) => t.id !== tabId);
-
-      if (activeTabId !== tabId) return nextTabs;
-
-      if (nextTabs.length === 0) {
-        setActiveTabId(null);
-        setSelectedItemType(null);
-        return nextTabs;
-      }
-
-      const nextIndex = Math.max(0, index - 1);
-      setActiveTabId(nextTabs[nextIndex].id);
-      return nextTabs;
-    });
-  };
-
-  const handleChangeContent = (nextContent) => {
-    setTabs((prevTabs) =>
-      prevTabs.map((t) =>
-        t.id === activeTabId ? { ...t, content: nextContent } : t
-      )
-    );
-  };
-
-  const handleSaveActiveTab = useCallback(async () => {
-    if (!activeTabId || selectedItemType !== "file") return;
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab) return;
+    const name = prompt("새 폴더 이름을 입력하세요 (예: components)");
+    if (!name) return;
 
     try {
-      await fetchJson("/api/file-contents", {
-        method: "POST",
-        body: JSON.stringify({ fileId: tab.id, content: tab.content }),
+      const parentId = selectedNodeId
+        ? findNodeById(fileTree, selectedNodeId)?.type === "folder"
+          ? selectedNodeId
+          : (findNodeById(fileTree, selectedNodeId)?.parentId ?? null)
+        : null;
+
+      await fileApi.create({
+        projectId,
+        parentId,
+        name: name.trim(),
+        type: "FOLDER",
       });
 
-      setTabs((prevTabs) =>
-        prevTabs.map((t) =>
-          t.id === activeTabId ? { ...t, savedContent: t.content } : t
-        )
-      );
-      appendTerminalLine("Saved.");
-    } catch (err) {
-      appendTerminalLine(`저장 실패: ${err.message}`);
+      await refreshTree();
+    } catch (e) {
+      console.error(e);
+      alert("폴더 생성 실패 (Network/Console 확인)");
     }
-  }, [activeTabId, appendTerminalLine, fetchJson, selectedItemType, tabs]);
+  }, [projectId, selectedNodeId, fileTree, refreshTree]);
 
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      const isMac = navigator.platform.toUpperCase().includes("MAC");
-      const isSave =
-        (isMac && e.metaKey && e.key.toLowerCase() === "s") ||
-        (!isMac && e.ctrlKey && e.key.toLowerCase() === "s");
+  const handleNewFile = useCallback(async () => {
+    if (!projectId) return alert("프로젝트를 먼저 선택해주세요.");
 
-      if (!isSave) return;
+    const name = prompt("새 파일 이름을 입력하세요 (예: Main.py / Main.java)");
+    if (!name) return;
 
-      e.preventDefault();
-      handleSaveActiveTab();
-    };
+    try {
+      const parentId = selectedNodeId
+        ? findNodeById(fileTree, selectedNodeId)?.type === "folder"
+          ? selectedNodeId
+          : (findNodeById(fileTree, selectedNodeId)?.parentId ?? null)
+        : null;
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSaveActiveTab]);
+      await fileApi.create({
+        projectId,
+        parentId,
+        name: name.trim(),
+        type: "FILE",
+      });
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) || null;
-  const activeFilename = activeTab?.title || "";
-  const extension = activeFilename.includes(".")
-    ? activeFilename.split(".").pop().toLowerCase()
-    : "";
-  const activeLanguage = LANGUAGE_MAP[extension] || null;
-
-  const isFileSelected = selectedItemType === "file" && Boolean(activeTabId);
-  const isRunnableLanguage = Boolean(activeLanguage);
-  const isRunDisabled = !isFileSelected || !isRunnableLanguage || isRunning;
-  const isStopDisabled = !isRunning;
-  const isSaveDisabled = !isFileSelected;
-
-  let runDisabledReason = "";
-  if (!isFileSelected) {
-    runDisabledReason =
-      selectedItemType === "folder"
-        ? "폴더는 실행할 수 없어요."
-        : "파일을 선택하세요.";
-  } else if (!isRunnableLanguage) {
-    runDisabledReason = "python/java 파일만 실행 가능해요.";
-  } else if (isRunning) {
-    runDisabledReason = "실행 중...";
-  }
-
-  const cleanupSocket = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close(1000, "cleanup");
-      wsRef.current = null;
+      await refreshTree();
+    } catch (e) {
+      console.error(e);
+      alert("파일 생성 실패 (Network/Console 확인)");
     }
-  }, []);
+  }, [projectId, selectedNodeId, fileTree, refreshTree]);
 
+  const handleDelete = useCallback(async () => {
+    if (!projectId) return alert("프로젝트를 먼저 선택해주세요.");
+    if (!selectedNodeId) return alert("삭제할 파일/폴더를 선택해주세요.");
+
+    const node = findNodeById(fileTree, selectedNodeId);
+    if (!node?.id) return alert("삭제 실패(선택 노드 id 없음)");
+
+    // eslint-disable-next-line no-restricted-globals
+    if (!confirm(`정말 삭제할까요?\n${node.name}`)) return;
+
+    try {
+      await fileApi.remove(node.id);
+      await refreshTree();
+
+      setSelectedNodeId(null);
+      setSelectedPath("");
+
+      if (openFileId === node.id) {
+        setOpenFileId(null);
+        setOpenFileName("");
+        setOpenFilePath("");
+        setEditorValue("");
+        setDirty(false);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("삭제 실패 (Network/Console 확인)");
+    }
+  }, [projectId, selectedNodeId, fileTree, refreshTree, openFileId]);
+
+  // ---------- save ----------
+  const handleSave = useCallback(async () => {
+    if (!openFileId) return alert("저장할 파일을 먼저 선택해주세요.");
+
+    try {
+      await fileContentApi.save({ fileId: openFileId, content: editorValue });
+      setDirty(false);
+      appendTerminal(`💾 Saved (${openFileName || openFileId})`);
+    } catch (e) {
+      console.error(e);
+      alert("저장 실패 (Network/Console 확인)");
+    }
+  }, [openFileId, editorValue, appendTerminal, openFileName]);
+
+  // ---------- run/stop ----------
   const handleRun = useCallback(() => {
-    if (isRunDisabled || !activeTab || !activeLanguage) return;
-    if (isRunningRef.current) return;
+    if (running) return;
+    if (!openFileId) return alert("실행할 파일을 선택해주세요.");
+    if (!editorValue.trim()) return alert("코드가 비어있습니다.");
 
-    cleanupSocket();
-    stopRequestedRef.current = false;
-    wsOpenedRef.current = false;
-    setRunning(true);
+    const lang = language; // dropdown 우선
+    if (lang !== "python" && lang !== "java") {
+      alert("언어를 python 또는 java로 선택해주세요.");
+      return;
+    }
 
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${protocol}://${window.location.host}/ws/compile`;
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
+    // 연결
+    connectWsIfNeeded();
 
-    socket.onopen = () => {
-      wsOpenedRef.current = true;
-      const payload = {
-        language: activeLanguage,
-        filename: activeTab.title,
-        code: activeTab.content,
-      };
-      socket.send(JSON.stringify(payload));
-    };
+    const ws = wsRef.current;
+    const payload = { code: editorValue, language: lang, params: [] };
 
-    socket.onmessage = (event) => {
-      const raw = event.data;
-      if (typeof raw === "string") {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed?.output) {
-            appendTerminalLine(parsed.output);
-            return;
-          }
-          if (parsed?.message) {
-            appendTerminalLine(parsed.message);
-            return;
-          }
-          if (parsed?.error) {
-            appendTerminalLine(`Error: ${parsed.error}`);
-            return;
-          }
-          appendTerminalLine(JSON.stringify(parsed));
-          return;
-        } catch {
-          appendTerminalLine(raw);
-          return;
-        }
-      }
+    // 아직 open 전이면 pending에 넣고 onOpen에서 start
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pendingStartRef.current = payload;
+      appendTerminal("[ws] connecting... (will start on open)");
+      return;
+    }
 
-      appendTerminalLine(String(raw));
-    };
-
-    socket.onerror = () => {
-      if (wsOpenedRef.current) {
-        appendTerminalLine("실행 중단됨");
-        stopRequestedRef.current = true;
-      } else {
-        appendTerminalLine("WebSocket 연결 실패");
-      }
+    try {
+      setRunning(true);
+      appendTerminal(`\n▶️ RUN (${lang})`);
+      wsStart(ws, payload);
+    } catch (e) {
+      console.error(e);
       setRunning(false);
-      wsRef.current = null;
-    };
-
-    socket.onclose = () => {
-      wsRef.current = null;
-      if (stopRequestedRef.current) {
-        stopRequestedRef.current = false;
-        return;
-      }
-      if (isRunningRef.current) {
-        appendTerminalLine("실행 중단됨");
-        setRunning(false);
-      }
-    };
+      alert("실행 요청 실패 (Console 확인)");
+    }
   }, [
-    activeLanguage,
-    activeTab,
-    appendTerminalLine,
-    cleanupSocket,
-    isRunDisabled,
-    setRunning,
+    running,
+    openFileId,
+    editorValue,
+    language,
+    connectWsIfNeeded,
+    appendTerminal,
   ]);
 
   const handleStop = useCallback(() => {
-    if (!isRunningRef.current) return;
-    stopRequestedRef.current = true;
-    appendTerminalLine("실행 중단됨");
-    setRunning(false);
-    cleanupSocket();
-  }, [appendTerminalLine, cleanupSocket, setRunning]);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-  useEffect(() => {
-    return () => {
-      cleanupSocket();
-    };
-  }, [cleanupSocket]);
+    try {
+      wsStop(ws);
+      appendTerminal("⏹ stop sent");
+      setRunning(false);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [appendTerminal]);
 
-  const handleLogout = () => {
+  const handleTerminalInput = useCallback(
+    (text) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      wsInput(ws, text);
+      appendTerminal("> " + text);
+    },
+    [appendTerminal]
+  );
+
+  // ---------- toggles/logout ----------
+  const onToggleLeft = useCallback(() => setShowLeft((v) => !v), []);
+  const onToggleRight = useCallback(() => setShowRight((v) => !v), []);
+  const onToggleTerminal = useCallback(() => setShowTerminal((v) => !v), []);
+
+  const handleLogout = useCallback(() => {
     logout();
-    clearActiveProject();
     navigate("/login", { replace: true });
-  };
+  }, [navigate]);
+
+  // ---------- render ----------
+  if (!activeProject) return null;
 
   return (
     <div
       className="ide-root"
       style={{
-        gridTemplateRows: `
-          48px
-          1fr
-          ${isTerminalOpen ? "180px" : "0px"}
-        `,
+        height: "100vh",
+        display: "grid",
+        gridTemplateRows: "auto 1fr auto",
       }}
     >
-      <div className="ide-header">
-        <HeaderBar
-          onToggleLeft={() => setIsLeftOpen((x) => !x)}
-          onToggleRight={() => setIsRightOpen((x) => !x)}
-          onToggleTerminal={() => setIsTerminalOpen((x) => !x)}
-          onRun={handleRun}
-          onStop={handleStop}
-          onSave={handleSaveActiveTab}
-          isRunDisabled={isRunDisabled}
-          isStopDisabled={isStopDisabled}
-          isSaveDisabled={isSaveDisabled}
-          runDisabledReason={runDisabledReason}
-          onLogout={handleLogout}
-          user={{ name: "developer" }}
-        />
-      </div>
+      <HeaderBar
+        onToggleLeft={onToggleLeft}
+        onToggleRight={onToggleRight}
+        onToggleTerminal={onToggleTerminal}
+        onLogout={handleLogout}
+        user={activeProject}
+        onRun={handleRun}
+        onStop={handleStop}
+        onSave={handleSave}
+        running={running}
+        language={language}
+        onChangeLanguage={setLanguage}
+      />
 
       <div
         className="ide-body"
         style={{
-          gridTemplateColumns: `
-            ${isLeftOpen ? "240px" : "0px"}
-            1fr
-            ${isRightOpen ? "320px" : "0px"}
-          `,
+          display: "grid",
+          gridTemplateColumns: showLeft ? "280px 1fr 360px" : "1fr 360px",
+          minHeight: 0,
         }}
       >
-        <aside className={`ide-left ${isLeftOpen ? "" : "closed"}`}>
-          <FileExplorer
-            files={fileTree}
-            onOpenFile={handleOpenFile}
-            openTabs={tabs}
-            activeTabId={activeTabId}
-            selectedFolderId={selectedFolderId}
-            onSelectFolder={handleSelectFolder}
-          />
-        </aside>
+        {showLeft && (
+          <div
+            className="ide-left"
+            style={{
+              borderRight: "1px solid rgba(255,255,255,0.08)",
+              minWidth: 0,
+              overflow: "auto",
+            }}
+          >
+            <FileExplorer
+              tree={fileTree}
+              selectedPath={selectedPath}
+              onSelect={handleSelect}
+              onNewFile={handleNewFile}
+              onNewFolder={handleNewFolder}
+              onDelete={handleDelete}
+              disabled={!projectId}
+            />
+          </div>
+        )}
 
-        <main className="ide-center">
+        <div className="ide-center" style={{ minWidth: 0, minHeight: 0 }}>
           <EditorArea
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onChangeActiveTab={handleChangeActiveTab}
-            onCloseTab={handleCloseTab}
-            onChangeContent={handleChangeContent}
+            filename={
+              openFileName ||
+              (openFilePath ? openFilePath.split("/").pop() : "")
+            }
+            value={editorValue}
+            onChange={(v) => {
+              setEditorValue(v);
+              setDirty(true);
+            }}
           />
-        </main>
+          {openFileId && (
+            <div
+              style={{
+                padding: "6px 12px",
+                fontSize: 12,
+                opacity: 0.7,
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              {dirty ? "● Modified" : "Saved"} · fileId={openFileId}
+            </div>
+          )}
+        </div>
 
-        <aside className={`ide-right ${isRightOpen ? "" : "closed"}`}>
-          <ChatPanel />
-        </aside>
+        {showRight && (
+          <div
+            className="ide-right"
+            style={{
+              borderLeft: "1px solid rgba(255,255,255,0.08)",
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            <ChatPanel projectId={projectId} />
+          </div>
+        )}
       </div>
 
-      <div className={`ide-bottom ${isTerminalOpen ? "" : "closed"}`}>
-        <TerminalPanel
-          lines={terminalLines}
-          onSubmitCommand={handleTerminalCommand}
-        />
-      </div>
+      {showTerminal && (
+        <div className="ide-bottom" style={{ height: 260, minHeight: 0 }}>
+          <TerminalPanel
+            lines={terminalLines}
+            onSendInput={handleTerminalInput}
+            onClear={clearTerminal}
+            disabled={false}
+          />
+        </div>
+      )}
     </div>
   );
 }
-
-export default IDELayout;

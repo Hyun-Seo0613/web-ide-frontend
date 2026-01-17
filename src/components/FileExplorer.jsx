@@ -1,68 +1,61 @@
-﻿import { useState } from "react";
+import { useMemo, useState } from "react";
 
-function FileExplorer({
-  files,
-  onOpenFile,
-  openTabs = [],
-  activeTabId,
-  onCreateFile,
-  onCreateFolder,
-  onDeleteFile,
-  selectedFolderId,
-  onSelectFolder,
+function normalizePath(path) {
+  if (!path) return "";
+  return path
+    .replaceAll("\\", "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/|\/$/g, "");
+}
+
+export default function FileExplorer({
+  tree,
+  selectedPath,
+  onSelect, // (path, type, nodeId)
+  onNewFile,
+  onNewFolder,
+  onDelete,
+  onRename,
+  disabled = false,
 }) {
-  const [expanded, setExpanded] = useState(() => new Set());
+  const rootChildren = useMemo(() => {
+    if (!tree || tree.type !== "folder") return [];
+    return Array.isArray(tree.children) ? tree.children : [];
+  }, [tree]);
 
-  const isOpenFile = (fileId) => openTabs.some((t) => t.id === fileId);
+  const [expanded, setExpanded] = useState(() => new Set());
 
   return (
     <div style={{ padding: 8 }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={onCreateFile}
-        >
+      <div
+        style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}
+      >
+        <button onClick={onNewFile} disabled={disabled}>
           + New File
         </button>
-
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={onCreateFolder}
-        >
+        <button onClick={onNewFolder} disabled={disabled}>
           + New Folder
         </button>
-
-        <button
-          type="button"
-          className="file-action-btn"
-          onClick={() => {
-            if (!activeTabId) {
-              alert("Select a file first.");
-              return;
-            }
-            onDeleteFile?.(activeTabId);
-          }}
-        >
-          Delete
+        <button onClick={onRename} disabled={disabled || !selectedPath}>
+          ✏️ Rename
+        </button>
+        <button onClick={onDelete} disabled={disabled || !selectedPath}>
+          🗑 Delete
         </button>
       </div>
 
       <div style={{ fontWeight: 700, marginBottom: 8 }}>EXPLORER</div>
 
-      {files.map((node) => (
+      {rootChildren.map((node) => (
         <TreeNode
-          key={node.type === "folder" ? `d:${node.id}` : `f:${node.id}`}
+          key={node.id ?? node.name}
           node={node}
           depth={0}
-          onOpenFile={onOpenFile}
-          isOpenFile={isOpenFile}
-          activeTabId={activeTabId}
+          path={node.name}
           expanded={expanded}
           setExpanded={setExpanded}
-          selectedFolderId={selectedFolderId}
-          onSelectFolder={onSelectFolder}
+          selectedPath={normalizePath(selectedPath)}
+          onSelect={onSelect}
         />
       ))}
     </div>
@@ -72,25 +65,24 @@ function FileExplorer({
 function TreeNode({
   node,
   depth,
-  onOpenFile,
-  isOpenFile,
-  activeTabId,
+  path,
   expanded,
   setExpanded,
-  selectedFolderId,
-  onSelectFolder,
+  selectedPath,
+  onSelect,
 }) {
   const paddingLeft = 8 + depth * 14;
+  const curPath = normalizePath(path);
 
   if (node.type === "folder") {
-    const isExpanded = expanded.has(node.id);
-    const isSelected = selectedFolderId === node.id;
+    const isExpanded = expanded.has(curPath);
+    const isSelected = selectedPath === curPath;
 
-    const toggleFolder = () => {
+    const toggle = () => {
       setExpanded((prev) => {
         const next = new Set(prev);
-        if (next.has(node.id)) next.delete(node.id);
-        else next.add(node.id);
+        if (next.has(curPath)) next.delete(curPath);
+        else next.add(curPath);
         return next;
       });
     };
@@ -100,8 +92,8 @@ function TreeNode({
         <button
           type="button"
           onClick={() => {
-            toggleFolder();
-            onSelectFolder?.(node.id);
+            toggle();
+            onSelect(curPath, "folder", node.id ?? null);
           }}
           style={{
             width: "100%",
@@ -109,30 +101,27 @@ function TreeNode({
             padding: "6px 8px",
             paddingLeft,
             border: "none",
-            background: isSelected ? "rgba(59, 130, 246, 0.25)" : "transparent",
+            background: isSelected ? "rgba(59,130,246,0.25)" : "transparent",
             cursor: "pointer",
             fontWeight: 700,
-            color: "inherit",
             borderRadius: 6,
           }}
         >
-          {isExpanded ? "-" : "+"} {node.name}
+          {isExpanded ? "📂" : "📁"} {node.name}
         </button>
 
-        {isExpanded && node.children && (
+        {isExpanded && (
           <div>
-            {node.children.map((child) => (
+            {(node.children || []).map((child) => (
               <TreeNode
-                key={child.type === "folder" ? `d:${child.id}` : `f:${child.id}`}
+                key={child.id ?? child.name}
                 node={child}
                 depth={depth + 1}
-                onOpenFile={onOpenFile}
-                isOpenFile={isOpenFile}
-                activeTabId={activeTabId}
+                path={`${curPath}/${child.name}`}
                 expanded={expanded}
                 setExpanded={setExpanded}
-                selectedFolderId={selectedFolderId}
-                onSelectFolder={onSelectFolder}
+                selectedPath={selectedPath}
+                onSelect={onSelect}
               />
             ))}
           </div>
@@ -141,14 +130,12 @@ function TreeNode({
     );
   }
 
-  const opened = isOpenFile(node.id);
-  const active = activeTabId === node.id;
-  const title = node.title || node.name || "Untitled";
+  const isActive = selectedPath === curPath;
 
   return (
     <button
       type="button"
-      onClick={() => onOpenFile?.(node)}
+      onClick={() => onSelect(curPath, "file", node.id ?? null)}
       style={{
         width: "100%",
         textAlign: "left",
@@ -156,18 +143,12 @@ function TreeNode({
         paddingLeft,
         border: "none",
         borderRadius: 6,
-        background: active ? "rgba(255,255,255,0.10)" : "transparent",
+        background: isActive ? "rgba(255,255,255,0.15)" : "transparent",
         cursor: "pointer",
-        fontWeight: opened ? 700 : 400,
-        color: "inherit",
+        fontWeight: isActive ? 700 : 400,
       }}
     >
-      <span style={{ display: "inline-block", width: 18 }}>
-        {opened ? "*" : " "}
-      </span>
-      {title}
+      📄 {node.name}
     </button>
   );
 }
-
-export default FileExplorer;

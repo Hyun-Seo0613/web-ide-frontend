@@ -1,56 +1,87 @@
-﻿function HeaderBar({
+export default function HeaderBar({
   onToggleLeft,
   onToggleRight,
   onToggleTerminal,
+
   onRun,
   onStop,
   onSave,
-  isRunDisabled,
-  isStopDisabled,
-  isSaveDisabled,
-  runDisabledReason,
+
+  running = false,
+  language = "python",
+  onChangeLanguage,
+
   onLogout,
   user,
 }) {
   return (
-    <header className="headerbar">
-      {/* Left side */}
-      <div className="headerbar-left">
-        <button onClick={onToggleLeft}>Left</button>
-        <button onClick={onToggleRight}>Right</button>
-        <button onClick={onToggleTerminal}>Terminal</button>
+    <header
+      className="headerbar"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        padding: "10px 12px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="button" onClick={onToggleLeft}>
+          Left
+        </button>
+        <button type="button" onClick={onToggleRight}>
+          Right
+        </button>
+        <button type="button" onClick={onToggleTerminal}>
+          Terminal
+        </button>
 
-        {onRun && (
-          <button onClick={onRun} disabled={isRunDisabled}>
-            Run
-          </button>
-        )}
-        {onStop && (
-          <button onClick={onStop} disabled={isStopDisabled}>
-            Stop
-          </button>
-        )}
-        {onSave && (
-          <button onClick={onSave} disabled={isSaveDisabled}>
-            Save
-          </button>
-        )}
-        {runDisabledReason && (
-          <span className="headerbar-hint">{runDisabledReason}</span>
-        )}
+        <div style={{ width: 10 }} />
+
+        <select
+          value={language}
+          onChange={(e) => onChangeLanguage?.(e.target.value)}
+          style={{ padding: "6px 8px" }}
+        >
+          <option value="python">python</option>
+          <option value="java">java</option>
+        </select>
+
+        <button type="button" onClick={onRun} disabled={running}>
+          {running ? "Running..." : "Run"}
+        </button>
+
+        <button type="button" onClick={onStop} disabled={!running}>
+          Stop
+        </button>
+
+        <button type="button" onClick={onSave} disabled={running}>
+          Save
+        </button>
       </div>
 
-      {/* Right side */}
-      <div className="headerbar-right">
+      <div
+        style={{
+          marginLeft: "auto",
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+        }}
+      >
         {user && (
-          <div className="profile">
-            <div className="profile-avatar">U</div>
-            <span className="profile-name">{user.name}</span>
+          <div
+            className="profile"
+            style={{ display: "flex", gap: 8, alignItems: "center" }}
+          >
+            <div className="profile-avatar">👤</div>
+            <span className="profile-name">
+              {user.name ?? user.id ?? "User"}
+            </span>
           </div>
         )}
 
         {onLogout && (
-          <button className="logout-btn" onClick={onLogout}>
+          <button type="button" onClick={onLogout}>
             Logout
           </button>
         )}
@@ -58,5 +89,3 @@
     </header>
   );
 }
-
-export default HeaderBar;

@@ -23,7 +23,11 @@ body,
   grid-template-rows: 48px 1fr 180px;
   background: #1e1e1e;
   color: #e5e5e5;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
     sans-serif;
 }
 
@@ -162,8 +166,9 @@ body,
   color: #e5e5e5;
   padding: 12px;
   box-sizing: border-box;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   font-size: 14px;
 }
 
@@ -179,8 +184,9 @@ body,
   display: grid;
   grid-template-rows: 1fr 40px;
   min-height: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 }
 
 .terminal-output {
@@ -413,7 +419,12 @@ body,
   min-height: 100%;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at top, #2a2a2a 0%, #141414 45%, #0a0a0a 100%);
+  background: radial-gradient(
+    circle at top,
+    #2a2a2a 0%,
+    #141414 45%,
+    #0a0a0a 100%
+  );
   color: #f6f2eb;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   position: relative;
@@ -425,9 +436,21 @@ body,
   position: absolute;
   inset: -120px;
   background:
-    radial-gradient(circle at 20% 20%, rgba(255, 180, 90, 0.16), transparent 45%),
-    radial-gradient(circle at 80% 30%, rgba(99, 102, 241, 0.2), transparent 55%),
-    radial-gradient(circle at 40% 80%, rgba(16, 185, 129, 0.18), transparent 45%);
+    radial-gradient(
+      circle at 20% 20%,
+      rgba(255, 180, 90, 0.16),
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 80% 30%,
+      rgba(99, 102, 241, 0.2),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at 40% 80%,
+      rgba(16, 185, 129, 0.18),
+      transparent 45%
+    );
   z-index: 0;
 }
 
@@ -526,7 +549,9 @@ body,
   font-weight: 600;
   background: linear-gradient(135deg, #f59e0b, #ec4899);
   color: #0b0b0b;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .project-select-btn:disabled {
@@ -632,7 +657,9 @@ body,
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .project-card:hover {
@@ -697,4 +724,7 @@ body,
   .project-select-invite-actions {
     grid-template-columns: 1fr;
   }
+}
+.ide-right {
+  justify-content: flex-start;
 }

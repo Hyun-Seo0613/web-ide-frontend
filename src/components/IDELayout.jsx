@@ -3,12 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { getAccessToken } from "../auth/auth";
 import { createChatClient, sendChat } from "../ws/chatStomp";
-import MonacoEditor from "./MonacoEditor"; // ✅ (추가) Monaco
-
+import { createCompileSocket, wsInput, wsStart, wsStop } from "../api/compileWs";
+import MonacoEditor from "./MonacoEditor";
 // =========================
 // Config
 // =========================
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://t2.mobidic.shop";
+const LANGUAGE_MAP = { py: "python", java: "java" };
 
 function api() {
   const token = getAccessToken();
@@ -121,8 +122,19 @@ export default function IDELayout() {
   const [treeLoading, setTreeLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [isRunning, setIsRunning] = useState(false);
+  const isRunningRef = useRef(false);
+  const wsRef = useRef(null);
+  const wsOpenedRef = useRef(false);
+  const stopRequestedRef = useRef(false);
+
   const pushTerminal = (line) => {
     setTerminalLines((prev) => [...prev, line]);
+  };
+
+  const setRunning = (next) => {
+    isRunningRef.current = next;
+    setIsRunning(next);
   };
 
   // =========================
@@ -418,6 +430,132 @@ export default function IDELayout() {
     }
   };
 
+  const openFileName = openFileNode?.name ?? "";
+  const extension = openFileName.includes(".")
+    ? openFileName.split(".").pop().toLowerCase()
+    : "";
+  const activeLanguage = LANGUAGE_MAP[extension] ?? null;
+  const isFileSelected = Boolean(openFileId) && openFileNode?.type === "FILE";
+  const isRunnableLanguage = Boolean(activeLanguage);
+  const isRunDisabled = !isFileSelected || !isRunnableLanguage || isRunning;
+  const isStopDisabled = !isRunning;
+  const isSaveDisabled = !isFileSelected || saving;
+
+  let runDisabledReason = "";
+  if (!isFileSelected) {
+    runDisabledReason =
+      selectedNode?.type === "FOLDER"
+        ? "Folders cannot be executed."
+        : "Select a file to run.";
+  } else if (!isRunnableLanguage) {
+    runDisabledReason = "Only .py and .java files can run.";
+  } else if (isRunning) {
+    runDisabledReason = "Running...";
+  }
+
+  const cleanupSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close(1000, "cleanup");
+      wsRef.current = null;
+    }
+  };
+
+  const handleRun = () => {
+    if (isRunDisabled || !activeLanguage || !isFileSelected) return;
+    if (isRunningRef.current) return;
+
+    const code = monacoGetValueRef.current?.() ?? editorText;
+    if (!code.trim()) {
+      pushTerminal("Error: code is required");
+      return;
+    }
+
+    cleanupSocket();
+    stopRequestedRef.current = false;
+    wsOpenedRef.current = false;
+    setRunning(true);
+    pushTerminal("[ws] connecting...");
+
+    const socket = createCompileSocket({
+      onOpen: () => {
+        wsOpenedRef.current = true;
+        pushTerminal(`RUN (${activeLanguage})`);
+        wsStart(socket, { code, language: activeLanguage, params: [] });
+      },
+      onMessage: (msg) => {
+        if (!msg || typeof msg !== "object") {
+          pushTerminal(String(msg));
+          return;
+        }
+
+        if (msg.type === "output") {
+          if (msg.data) pushTerminal(msg.data);
+          return;
+        }
+
+        if (msg.type === "result") {
+          if (msg.stdout) pushTerminal(msg.stdout);
+          if (msg.stderr) pushTerminal(msg.stderr);
+          pushTerminal(
+            `result: ${msg.result} (exitCode=${msg.exitCode ?? "?"}, ${
+              msg.performance ?? "?"
+            }ms)`
+          );
+          setRunning(false);
+          return;
+        }
+
+        if (msg.type === "error") {
+          pushTerminal(`Error: ${msg.message ?? "unknown error"}`);
+          setRunning(false);
+          return;
+        }
+
+        pushTerminal(JSON.stringify(msg));
+      },
+      onError: () => {
+        if (wsOpenedRef.current) {
+          pushTerminal("Execution stopped");
+          stopRequestedRef.current = true;
+        } else {
+          pushTerminal("WebSocket connection failed");
+        }
+        setRunning(false);
+        wsRef.current = null;
+      },
+      onClose: () => {
+        wsRef.current = null;
+        if (stopRequestedRef.current) {
+          stopRequestedRef.current = false;
+          return;
+        }
+        if (isRunningRef.current) {
+          pushTerminal("Execution stopped");
+          setRunning(false);
+        }
+      },
+    });
+
+    wsRef.current = socket;
+  };
+
+  const handleStop = () => {
+    if (!isRunningRef.current) return;
+    stopRequestedRef.current = true;
+    pushTerminal("Execution stopped");
+    setRunning(false);
+    if (wsRef.current) {
+      wsStop(wsRef.current);
+    }
+    cleanupSocket();
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupSocket();
+    };
+  }, []);
+
   // =========================
   // Render helpers
   // =========================
@@ -460,21 +598,24 @@ export default function IDELayout() {
 
           <button
             className="icon-btn"
-            onClick={() => pushTerminal("Run (demo)")}
+            onClick={handleRun}
+            disabled={isRunDisabled}
+            title={runDisabledReason}
           >
             Run
           </button>
           <button
             className="icon-btn"
-            onClick={() => pushTerminal("Stop (demo)")}
+            onClick={handleStop}
+            disabled={isStopDisabled}
           >
             Stop
           </button>
           <button
             className="icon-btn"
             onClick={saveFileContent}
-            disabled={!openFileId || saving}
-            title={!openFileId ? "파일을 선택하세요" : ""}
+            disabled={isSaveDisabled}
+            title={!isFileSelected ? "Select a file to save." : ""}
           >
             {saving ? "Saving..." : dirty ? "Save *" : "Save"}
           </button>
@@ -578,7 +719,14 @@ export default function IDELayout() {
         <TerminalPanel
           lines={terminalLines}
           onClear={() => setTerminalLines(["Web IDE Terminal"])}
-          onSendInput={(text) => pushTerminal(`> ${text}`)}
+          onSendInput={(text) => {
+            pushTerminal(`> ${text}`);
+            if (!isRunningRef.current || !wsRef.current) {
+              pushTerminal("Error: no active execution");
+              return;
+            }
+            wsInput(wsRef.current, text);
+          }}
         />
       </div>
     </div>

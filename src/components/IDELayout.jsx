@@ -112,8 +112,12 @@ export default function IDELayout() {
   // Terminal logs
   const [terminalLines, setTerminalLines] = useState(() => [
     "Web IDE Terminal",
-    "Run 踰꾪듉?쇰줈 Java/Python ?ㅽ뻾 (/ws/compile)",
+    "Run triggers /ws/compile (python/java)",
   ]);
+
+  const pushTerminal = useCallback((line) => {
+    setTerminalLines((prev) => [...prev, line]);
+  }, []);
 
   // Chat
   const [chatMessages, setChatMessages] = useState(() => [
@@ -934,6 +938,10 @@ function TerminalPanel({ lines, onClear, onSendInput }) {
     </div>
   );
 }
+
+
+
+
 
 
 

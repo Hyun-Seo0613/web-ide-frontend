@@ -5,7 +5,7 @@ import { createChatClient, sendChat } from "../ws/chatStomp";
 
 export default function ChatPanel({ roomId: roomIdProp }) {
   const project = getActiveProject();
-  const roomId = roomIdProp ?? project?.id; // ✅ prop 우선, 없으면 fallback
+  const roomId = roomIdProp ?? project?.id;
   const user = getLocalUser();
 
   const [messages, setMessages] = useState([
@@ -19,6 +19,15 @@ export default function ChatPanel({ roomId: roomIdProp }) {
   const pendingIdsRef = useRef(new Set());
   const composingRef = useRef(false);
   const sendingLockRef = useRef(false);
+
+  // ✅ 최후 안전장치: 짧은 시간 중복 전송 방지
+  const lastSendRef = useRef({ text: "", at: 0 });
+
+  // ✅ 최신 input ref (stale 방지)
+  const inputRef = useRef("");
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -93,8 +102,18 @@ export default function ChatPanel({ roomId: roomIdProp }) {
   }, [roomId]);
 
   const handleSend = () => {
-    const text = input.trim();
+    const text = (inputRef.current ?? "").trim();
     if (!text) return;
+
+    // ✅ 200ms 내 동일 텍스트 재전송 방지 (IME/이벤트 꼬임 최후 방어)
+    const now = Date.now();
+    if (
+      lastSendRef.current.text === text &&
+      now - lastSendRef.current.at < 200
+    ) {
+      return;
+    }
+    lastSendRef.current = { text, at: now };
 
     const client = clientRef.current;
     if (!client || !client.connected) {
@@ -124,14 +143,28 @@ export default function ChatPanel({ roomId: roomIdProp }) {
     };
 
     setInput("");
+    inputRef.current = "";
     sendChat(client, roomId, payload);
   };
 
+  // ✅ keydown에서는 Enter 기본동작만 막고 “전송은 안 함”
   const onKeyDown = (e) => {
-    if (e.isComposing || composingRef.current) return;
-
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+    }
+  };
+
+  // ✅ 전송은 keyup에서 처리 (IME 꼬임이 훨씬 적음)
+  const onKeyUp = (e) => {
+    const native = e.nativeEvent;
+
+    // IME 조합 중이면 무시
+    if (e.isComposing || native?.isComposing || composingRef.current) return;
+
+    // IME가 keyCode 229로 들어오는 환경 방어
+    if (native?.keyCode === 229) return;
+
+    if (e.key === "Enter" && !e.shiftKey) {
       if (sendingLockRef.current) return;
       sendingLockRef.current = true;
 
@@ -209,6 +242,7 @@ export default function ChatPanel({ roomId: roomIdProp }) {
           onCompositionStart={() => (composingRef.current = true)}
           onCompositionEnd={() => (composingRef.current = false)}
           onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
           rows={2}
           style={{
             flex: 1,

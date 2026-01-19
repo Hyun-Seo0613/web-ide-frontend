@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { getAccessToken } from "../auth/auth";
 import { createChatClient, sendChat } from "../ws/chatStomp";
+import MonacoEditor from "./MonacoEditor"; // ✅ (추가) Monaco
 
 // =========================
 // Config
@@ -28,7 +29,7 @@ function api() {
 function safeJsonParse(s, fallback) {
   try {
     return JSON.parse(s);
-  } catch {
+  } catch (e) {
     return fallback;
   }
 }
@@ -100,6 +101,9 @@ export default function IDELayout() {
 
   const [editorText, setEditorText] = useState("");
   const [dirty, setDirty] = useState(false);
+
+  // ✅ (2) Monaco 현재값 getter ref 추가
+  const monacoGetValueRef = useRef(() => editorText);
 
   // Terminal logs
   const [terminalLines, setTerminalLines] = useState(() => [
@@ -178,7 +182,6 @@ export default function IDELayout() {
       localStorage.setItem(contentKey(projectId, fileId), content);
       setDirty(false);
     } catch (e) {
-      // Swagger에 있으니 원칙적으로 404면 이상: fileId가 잘못되었거나 서버쪽 데이터 없거나 라우팅 문제
       if (isAxiosNotFound(e)) {
         pushTerminal(
           "⚠️ 서버에 파일 내용이 없습니다(404) → 로컬 임시 내용으로 진행"
@@ -196,24 +199,29 @@ export default function IDELayout() {
 
     setSaving(true);
     try {
+      // ✅ Monaco에서 최신 값을 가져옴 (textarea 시절 editorText 대신)
+      const latest = monacoGetValueRef.current();
+
       // 1) 로컬 저장 먼저(데모 안정)
-      localStorage.setItem(contentKey(projectId, fileId), editorText);
+      localStorage.setItem(contentKey(projectId, fileId), latest);
 
       // 2) 서버 저장 (Swagger: POST /api/file-contents)
       await api().post(`/api/file-contents`, {
         fileId,
-        content: editorText,
+        content: latest,
       });
+
+      // (선택) 화면상 editorText도 최신으로 맞춰두기
+      setEditorText(latest);
 
       pushTerminal("✅ 저장 완료(서버)");
       setDirty(false);
     } catch (e) {
       console.error(e);
-      // 서버 저장 실패해도 데모 안깨지게: 로컬은 이미 저장됨
       pushTerminal(
         "✅ 저장 완료(로컬 임시) — 서버 저장 실패(Network/Console 확인)"
       );
-      setDirty(false); // 데모 목적이면 false가 편함. (원하면 true로 유지 가능)
+      setDirty(false);
     } finally {
       setSaving(false);
     }
@@ -278,7 +286,6 @@ export default function IDELayout() {
         setSelectedId(createdId);
         setOpenFileId(createdId);
 
-        // 새 파일은 서버에 content가 없을 수 있으니 로컬 캐시 기본값 세팅
         localStorage.setItem(contentKey(projectId, createdId), "");
         await loadFileContent(createdId);
       }
@@ -297,7 +304,6 @@ export default function IDELayout() {
     if (!trimmed) return;
 
     try {
-      // ✅ Swagger: PUT /api/files/{fileId}/name
       await api().put(`/api/files/${selectedNode.id}/name`, { name: trimmed });
       pushTerminal(`✅ 이름 변경: ${trimmed}`);
       await fetchFileTree();
@@ -313,11 +319,9 @@ export default function IDELayout() {
     if (!ok) return;
 
     try {
-      // ✅ Swagger: DELETE /api/files/{fileId}
       await api().delete(`/api/files/${selectedNode.id}`);
       pushTerminal(`✅ 삭제 완료: ${selectedNode.name}`);
 
-      // 열린 파일을 지웠으면 에디터 비우기
       if (openFileId === selectedNode.id) {
         setOpenFileId(null);
         setEditorText("");
@@ -363,7 +367,7 @@ export default function IDELayout() {
     return () => {
       try {
         client.deactivate();
-      } catch {}
+      } catch (e) {}
       chatClientRef.current = null;
     };
   }, [projectId]);
@@ -379,7 +383,7 @@ export default function IDELayout() {
       if (c?.connected) {
         sendChat(c, `p_${projectId}`, { content: trimmed });
       }
-    } catch {}
+    } catch (e) {}
   };
 
   // =========================
@@ -543,24 +547,21 @@ export default function IDELayout() {
             </div>
 
             <div className="editor-content">
+              {/* ✅ (3) textarea -> MonacoEditor로 교체 */}
               {!openFileId ? (
                 <div style={{ opacity: 0.7, padding: 10 }}>
                   파일을 선택해 코드를 입력해보세요...
                 </div>
               ) : (
-                <textarea
-                  className="editor-textarea"
-                  value={editorText}
-                  onChange={(e) => {
-                    setEditorText(e.target.value);
-                    setDirty(true);
-                    // 데모 안정: 입력할 때마다 로컬 임시 저장
-                    localStorage.setItem(
-                      contentKey(projectId, openFileId),
-                      e.target.value
-                    );
-                  }}
-                />
+                <div style={{ width: "100%", height: "100%" }}>
+                  <MonacoEditor
+                    fileId={openFileId}
+                    initialValue={editorText}
+                    language="python"
+                    onDirtyChange={(v) => setDirty(v)}
+                    registerGetValue={(fn) => (monacoGetValueRef.current = fn)}
+                  />
+                </div>
               )}
             </div>
           </div>
@@ -687,6 +688,21 @@ function ChatPanel({ messages, onSend }) {
           onChange={(e) => setText(e.target.value)}
           placeholder="메시지를 입력하세요... (Enter 전송 / Shift+Enter 줄바꿈)"
           onKeyDown={(e) => {
+            // keydown에서는 줄바꿈만 막는다 (IME 꼬임 방지)
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+            }
+          }}
+          onKeyUp={(e) => {
+            const native = e.nativeEvent;
+            if (
+              e.isComposing ||
+              native?.isComposing ||
+              native?.keyCode === 229
+            ) {
+              return;
+            }
+
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               onSend?.(text);

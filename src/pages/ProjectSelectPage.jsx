@@ -241,7 +241,7 @@ export default function ProjectSelectPage() {
               >
                 <div className="project-card-title">{project.name}</div>
                 <div className="project-card-stack">{project.stack}</div>
-                {project.inviteCode && (
+                {isActive && project.inviteCode && (
                   <div className="project-card-meta">
                     <span>Invite: {project.inviteCode}</span>
                     <span

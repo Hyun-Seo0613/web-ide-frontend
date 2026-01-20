@@ -269,9 +269,32 @@ export default function ProjectSelectPage() {
                 <div className="project-card-meta">
                   <span>{project.inviteCode ? "invited" : "member"}</span>
                   <span>
-                    {isActive && project.inviteCode
-                      ? `Invite: ${project.inviteCode}`
-                      : project.updatedAt}
+                    {isActive && project.inviteCode ? (
+                      <span
+                        className="invite-code"
+                        role="button"
+                        tabIndex={0}
+                        title="Click to copy"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard
+                            .writeText(project.inviteCode)
+                            .catch(() => {});
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.stopPropagation();
+                            navigator.clipboard
+                              .writeText(project.inviteCode)
+                              .catch(() => {});
+                          }
+                        }}
+                      >
+                        Invite: {project.inviteCode}
+                      </span>
+                    ) : (
+                      project.updatedAt
+                    )}
                   </span>
                 </div>
               </button>

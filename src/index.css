@@ -697,6 +697,20 @@ body,
   color: rgba(255, 255, 255, 0.6);
 }
 
+.invite-code {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  user-select: text;
+}
+
+.invite-code:focus {
+  outline: 2px solid rgba(236, 72, 153, 0.6);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .project-card--empty {
   border-style: dashed;
   text-align: center;

@@ -1,7 +1,7 @@
 // src/pages/ProjectSelectPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { setActiveProject, getUserIdFromToken } from "../auth/auth";
+import { setActiveProject } from "../auth/auth";
 import { projectApi } from "../api/projectApi";
 
 function mapServerProject(p) {
@@ -141,19 +141,11 @@ export default function ProjectSelectPage() {
     }
   };
 
-  // ✅ Swagger 기준: POST /api/projects/{projectId}/members/join?inviteCode=...&userId=...
+  // ✅ Swagger 기준: POST /api/projects/{projectId}/members/join?inviteCode=...
   const handleJoinProject = async () => {
     const code = inviteCode.trim();
     if (!code) {
       setInviteError("Invite code is required.");
-      return;
-    }
-
-    const userId = getUserIdFromToken();
-    if (!userId) {
-      setInviteError(
-        "토큰에서 userId를 찾을 수 없습니다. (JWT payload에 userId/id/sub 중 하나가 있어야 합니다)"
-      );
       return;
     }
 
@@ -174,7 +166,6 @@ export default function ProjectSelectPage() {
       await projectApi.joinByInviteCode({
         projectId,
         inviteCode: code,
-        userId,
       });
 
       // 3) 내 프로젝트 목록 갱신

@@ -32,12 +32,12 @@ export const projectApi = {
     return data;
   },
 
-  // 초대코드로 참가 (스웨거상 query로 inviteCode,userId 필요)
-  joinByInviteCode: async ({ projectId, inviteCode, userId }) => {
+  // 초대코드로 참가 (userId는 JWT에서 추출)
+  joinByInviteCode: async ({ projectId, inviteCode }) => {
     const { data } = await client.post(
       `/api/projects/${projectId}/members/join`,
       null,
-      { params: { inviteCode, userId } }
+      { params: { inviteCode } }
     );
     return data;
   },
